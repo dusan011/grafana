@@ -969,7 +969,6 @@ jobs:
 workflows:
   build-pipeline:
     jobs:
-      # No filters, meaning this job runs for all branches
       - build-backend:
           filters: *filter-master-or-release
           edition: oss
