@@ -172,6 +172,7 @@ export class QueryEditorRow extends PureComponent<Props, State> {
 
       return (
         <QueryEditor
+          key={datasource.name}
           query={query}
           datasource={datasource}
           onChange={onChange}
