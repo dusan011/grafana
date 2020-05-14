@@ -24,6 +24,7 @@ import { QueryEditorRowTitle } from './QueryEditorRowTitle';
 import { QueryOperationRow } from 'app/core/components/QueryOperationRow/QueryOperationRow';
 import { QueryOperationAction } from 'app/core/components/QueryOperationRow/QueryOperationAction';
 import { DashboardModel } from '../state/DashboardModel';
+import { selectors } from '@grafana/e2e-selectors';
 
 interface Props {
   panel: PanelModel;
@@ -88,7 +89,13 @@ export class QueryEditorRow extends PureComponent<Props, State> {
   async loadDatasource() {
     const { query, panel } = this.props;
     const dataSourceSrv = getDatasourceSrv();
-    const datasource = await dataSourceSrv.get(query.datasource || panel.datasource);
+    let datasource;
+
+    try {
+      datasource = await dataSourceSrv.get(query.datasource || panel.datasource);
+    } catch (error) {
+      datasource = await dataSourceSrv.get();
+    }
 
     this.setState({
       datasource,
@@ -282,11 +289,13 @@ export class QueryEditorRow extends PureComponent<Props, State> {
     const editor = this.renderPluginEditor();
 
     return (
-      <QueryOperationRow title={this.renderTitle} actions={this.renderActions} onOpen={this.onOpen}>
-        <div className={rowClasses}>
-          <ErrorBoundaryAlert>{editor}</ErrorBoundaryAlert>
-        </div>
-      </QueryOperationRow>
+      <div aria-label={selectors.components.QueryEditorRows.rows}>
+        <QueryOperationRow title={this.renderTitle} actions={this.renderActions} onOpen={this.onOpen}>
+          <div className={rowClasses}>
+            <ErrorBoundaryAlert>{editor}</ErrorBoundaryAlert>
+          </div>
+        </QueryOperationRow>
+      </div>
     );
   }
 }

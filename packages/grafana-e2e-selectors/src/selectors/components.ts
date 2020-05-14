@@ -18,6 +18,7 @@ export const Components = {
     Panel: {
       title: (title: string) => `Panel header title item ${title}`,
       headerItems: (item: string) => `Panel header item ${item}`,
+      containerByTitle: (title: string) => `Panel container title ${title}`,
     },
     Visualization: {
       Graph: {
@@ -27,6 +28,9 @@ export const Components = {
         Legend: {
           legendItemAlias: (name: string) => `gpl alias ${name}`,
           showLegendSwitch: 'gpl show legend',
+        },
+        xAxis: {
+          labels: () => 'div.flot-x-axis > div.flot-tick-label',
         },
       },
     },
@@ -49,6 +53,7 @@ export const Components = {
       close: Pages.Dashboard.Toolbar.toolbarItems('Close options pane'),
       open: Pages.Dashboard.Toolbar.toolbarItems('Open options pane'),
       select: 'Panel editor option pane select',
+      tab: (title: string) => `Panel editor option pane tab ${title}`,
     },
     // not sure about the naming *DataPane*
     DataPane: {
@@ -67,6 +72,8 @@ export const Components = {
     },
     Query: {
       content: 'Panel inspector Query content',
+      refreshButton: 'Panel inspector Query refresh button',
+      jsonObjectKeys: () => '.json-formatter-key',
     },
   },
   Tab: {
@@ -76,6 +83,14 @@ export const Components = {
   QueryTab: {
     content: 'Query editor tab content',
     queryInspectorButton: 'Query inspector button',
+    addQuery: 'Query editor add query button',
+  },
+  QueryEditorRows: {
+    rows: 'Query editor row',
+  },
+  QueryEditorRow: {
+    actionButton: (title: string) => `${title} query operation action`,
+    title: (refId: string) => `Query editor row title ${refId}`,
   },
   AlertTab: {
     content: 'Alert editor tab content',
@@ -98,11 +113,19 @@ export const Components = {
   },
   Select: {
     option: 'Select option',
+    input: () => 'input[id*="react-select-"]',
+    singleValue: () => 'div[class*="-singleValue"]',
   },
   FieldConfigEditor: {
     content: 'Field config editor content',
   },
   OverridesConfigEditor: {
     content: 'Field overrides editor content',
+  },
+  FolderPicker: {
+    container: 'Folder picker select container',
+  },
+  TimeZonePicker: {
+    container: 'Time zone picker select container',
   },
 };

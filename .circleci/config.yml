@@ -2,6 +2,10 @@ version: 2.1
 
 aliases:
   # Workflow filters
+  # filter-all triggers for all branches and version tags
+  - &filter-all
+    tags:
+      only: /^v[0-9]+(\.[0-9]+){2}(-.+|[^-.]*)$/
   - &filter-only-release
     branches:
       only: chore/test-release-pipeline
@@ -37,7 +41,7 @@ executors:
       - image: cimg/go:1.14
   grafana-build:
     docker:
-      - image: grafana/build-container:1.2.15
+      - image: grafana/build-container:1.2.16
   grafana-publish:
     docker:
       - image: grafana/grafana-ci-deploy:1.2.5
@@ -52,7 +56,7 @@ commands:
       - run:
           name: "Install Grafana build pipeline tool"
           command: |
-            VERSION=0.3.0
+            VERSION=0.4.6
             curl -fLO https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${VERSION}/grabpl
             chmod +x grabpl
             mv grabpl /tmp
@@ -89,7 +93,7 @@ jobs:
             elif [[ $CIRCLE_BRANCH == "chore/test-release-pipeline" ]]; then
               # We're testing the release pipeline
               /tmp/grabpl build-backend --edition << parameters.edition >> \
-                --variants << parameters.variant >> v7.0.0-beta1
+                --variants << parameters.variant >> v7.0.0-beta3
             else
               # A master or PR build
               /tmp/grabpl build-backend --edition << parameters.edition >> \
@@ -190,7 +194,13 @@ jobs:
       - run:
           name: Build internal Grafana plug-ins
           command: |
-            /tmp/grabpl build-plugins --jobs 2 --edition << parameters.edition >>
+            if [[ -n "$CIRCLE_PR_NUMBER" ]]; then
+              # This is a forked PR, so don't sign as it requires an API secret
+              /tmp/grabpl build-plugins --jobs 2 --edition << parameters.edition >>
+            else
+              export GRAFANA_API_KEY=$GRAFANA_COM_API_KEY
+              /tmp/grabpl build-plugins --jobs 2 --edition << parameters.edition >> --sign --signing-admin
+            fi
       - run:
           name: Move artifacts
           command: |
@@ -390,18 +400,24 @@ jobs:
               source scripts/build/gpg-test-vars.sh
             fi
 
+            # Necessary for signing bundled plugins
+            export GRAFANA_API_KEY=$GRAFANA_COM_API_KEY
             if [[ -n $CIRCLE_TAG ]]; then
               # A release build
-              /tmp/grabpl package --jobs 2 --edition oss $CIRCLE_TAG
+              /tmp/grabpl package --jobs 2 --edition oss --sign $CIRCLE_TAG
             elif [[ $CIRCLE_BRANCH == "chore/test-release-pipeline" ]]; then
               # We're testing the release pipeline
-              /tmp/grabpl package --jobs 2 --edition oss v7.0.0-beta1
+              /tmp/grabpl package --jobs 2 --edition oss --sign v7.0.0-beta3
             elif [[ $CIRCLE_BRANCH == "master" ]]; then
               # A master build
-              /tmp/grabpl package --jobs 2 --edition oss --build-id $CIRCLE_WORKFLOW_ID
-            else
-              # A PR build
+              /tmp/grabpl package --jobs 2 --edition oss --sign --build-id $CIRCLE_WORKFLOW_ID
+            elif [[ -n "$CIRCLE_PR_NUMBER" ]]; then
+              # A forked forked PR build, don't sign as it requires an API secret
               /tmp/grabpl package --jobs 2 --edition oss --build-id $CIRCLE_WORKFLOW_ID --variants \
+                linux-x64,linux-x64-musl,osx64,win64
+            else
+              # A non-forked PR build
+              /tmp/grabpl package --jobs 2 --edition oss --sign --build-id $CIRCLE_WORKFLOW_ID --variants \
                 linux-x64,linux-x64-musl,osx64,win64
             fi
       - run:
@@ -445,18 +461,25 @@ jobs:
       - run:
           name: Package Grafana
           command: |
+            # Necessary for signing bundled plugins
+            export GRAFANA_API_KEY=$GRAFANA_COM_API_KEY
+
             if [[ -n $CIRCLE_TAG ]]; then
               # A release build
-              /tmp/grabpl package --jobs 2 --edition enterprise $CIRCLE_TAG
+              /tmp/grabpl package --jobs 2 --edition enterprise --sign $CIRCLE_TAG
             elif [[ $CIRCLE_BRANCH == "chore/test-release-pipeline" ]]; then
               # We're testing the release pipeline
-              /tmp/grabpl package --jobs 2 --edition enterprise v7.0.0-beta1
+              /tmp/grabpl package --jobs 2 --edition enterprise --sign v7.0.0-beta3
             elif [[ $CIRCLE_BRANCH == "master" ]]; then
               # A master build
-              /tmp/grabpl package --jobs 2 --edition enterprise --build-id $CIRCLE_WORKFLOW_ID
+              /tmp/grabpl package --jobs 2 --edition enterprise --sign --build-id $CIRCLE_WORKFLOW_ID
+            elif [[ -n "$CIRCLE_PR_NUMBER" ]]; then
+              # A forked forked PR build, don't sign as it requires an API secret
+              /tmp/grabpl package --jobs 2 --edition enterprise --build-id $CIRCLE_WORKFLOW_ID --variants \
+                linux-x64,linux-x64-musl,osx64,win64
             else
               # A PR build
-              /tmp/grabpl package --jobs 2 --edition enterprise --build-id $CIRCLE_WORKFLOW_ID --variants \
+              /tmp/grabpl package --jobs 2 --edition enterprise --sign --build-id $CIRCLE_WORKFLOW_ID --variants \
                 linux-x64,linux-x64-musl,osx64,win64
             fi
       - run:
@@ -620,8 +643,12 @@ jobs:
             if [[ $CIRCLE_BRANCH == "chore/test-release-pipeline" ]]; then
               # We're testing the release pipeline
               /tmp/grabpl publish-docker --jobs 4 --edition << parameters.edition >> --ubuntu=<< parameters.ubuntu >> --dry-run
-            else
+            elif [[ -n $CIRCLE_TAG ]]; then
+              # This is a release
               /tmp/grabpl publish-docker --jobs 4 --edition << parameters.edition >> --ubuntu=<< parameters.ubuntu >>
+            else
+              # TODO: Don't ignore errors, temporary workaround until we fix #22955
+              /tmp/grabpl publish-docker --jobs 4 --edition << parameters.edition >> --ubuntu=<< parameters.ubuntu >> || echo Publishing failed!
             fi
       - run:
           name: CI job failed
@@ -661,6 +688,9 @@ jobs:
           name: Start grafana-server
           command: ./e2e/start-server
           background: true
+      - run:
+          name: "Wait for Grafana to start"
+          command: './e2e/wait-for-grafana'
       - run:
           name: Run end-to-end tests
           command: ./e2e/run-suite
@@ -856,7 +886,8 @@ jobs:
       - run:
           name: Build Grafana docs website
           command: |
-            IMAGE=grafana/docs-base@sha256:63758b74e3990ab61e274f5e98da092d5c38378829dad0488aa97c59f0144f34
+            # Use latest revision here, since we want to catch if it breaks
+            IMAGE=grafana/docs-base:latest
 
             # In order to copy sources into the remote container, we need to employ a trick of creating a container
             # with a volume, that we copy the sources into. Then, we launch the build container, with the volume
@@ -975,200 +1006,174 @@ workflows:
           variant: armv6
           name: build-oss-backend-armv6
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           edition: oss
           variant: armv7
           name: build-oss-backend-armv7
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           edition: oss
           variant: armv7-musl
           name: build-oss-backend-armv7-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           edition: oss
           variant: arm64
           name: build-oss-backend-arm64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           edition: oss
           variant: arm64-musl
           name: build-oss-backend-arm64-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           edition: oss
           variant: osx64
           name: build-oss-backend-osx64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           edition: oss
           variant: win64
           name: build-oss-backend-win64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           edition: oss
           variant: linux-x64
           name: build-oss-backend-linux-x64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           edition: oss
           variant: linux-x64-musl
           name: build-oss-backend-linux-x64-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-frontend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-oss-frontend
           edition: oss
-          requires:
-            - test-backend
-            - test-frontend
       - build-plugins:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-oss-plugins
           edition: oss
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           name: build-enterprise-backend-armv6
           edition: enterprise
           variant: armv6
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           name: build-enterprise-backend-armv7
           edition: enterprise
           variant: armv7
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           name: build-enterprise-backend-armv7-musl
           edition: enterprise
           variant: armv7-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           name: build-enterprise-backend-arm64
           edition: enterprise
           variant: arm64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
           filters: *filter-master-or-release
           name: build-enterprise-backend-arm64-musl
           edition: enterprise
           variant: arm64-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-backend-osx64
           edition: enterprise
           variant: osx64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-backend-win64
           edition: enterprise
           variant: win64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-backend-linux-x64
           edition: enterprise
           variant: linux-x64
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-backend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-backend-linux-x64-musl
           edition: enterprise
           variant: linux-x64-musl
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-frontend:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-frontend
           edition: enterprise
-          requires:
-            - test-backend
-            - test-frontend
       - build-plugins:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-plugins
           edition: enterprise
           requires:
-            - test-backend
-            - test-frontend
+            - lint-go
       - build-release-publisher:
           filters: *filter-master-or-release
-      # No filters, meaning this job runs for all branches
-      - codespell
-      # No filters, meaning this job runs for all branches
-      - lint-go
-      # No filters, meaning this job runs for all branches
-      - shellcheck
-      # No filters, meaning this job runs for all branches
+      - codespell:
+          filters: *filter-all
+      - lint-go:
+          filters: *filter-all
+      - shellcheck:
+          filters: *filter-all
       - test-backend:
+          filters: *filter-all
           requires:
             - lint-go
-      # No filters, meaning this job runs for all branches
-      - test-frontend
-      # No filters, meaning this job runs for all branches
+      - test-frontend:
+          filters: *filter-all
       - mysql-integration-test:
+          filters: *filter-all
           requires:
             - lint-go
             - test-backend
             - test-frontend
       - postgres-integration-test:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - lint-go
             - test-backend
             - test-frontend
       - package-oss:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - build-oss-backend-armv6
             - build-oss-backend-armv7
@@ -1186,7 +1191,7 @@ workflows:
             - shellcheck
             - build-oss-plugins
       - package-enterprise:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - build-enterprise-backend-armv6
             - build-enterprise-backend-armv7
@@ -1204,11 +1209,11 @@ workflows:
             - shellcheck
             - build-enterprise-plugins
       - build-oss-windows-installer:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - package-oss
       - build-enterprise-windows-installer:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - package-enterprise
       - release-next-packages:
@@ -1244,11 +1249,12 @@ workflows:
             - postgres-integration-test
             - build-release-publisher
       - publish-storybook:
+          filters: *filter-all
           requires:
             - test-backend
             - test-frontend
       - build-docker-images:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-oss-docker-images
           edition: oss
           ubuntu: false
@@ -1259,7 +1265,7 @@ workflows:
             - package-oss
             - build-oss-windows-installer
       - build-docker-images:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-oss-ubuntu-docker-images
           edition: oss
           ubuntu: true
@@ -1270,7 +1276,7 @@ workflows:
             - package-oss
             - build-oss-windows-installer
       - build-docker-images:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-docker-images
           edition: enterprise
           ubuntu: false
@@ -1281,7 +1287,7 @@ workflows:
             - package-enterprise
             - build-enterprise-windows-installer
       - build-docker-images:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           name: build-enterprise-ubuntu-docker-images
           edition: enterprise
           ubuntu: true
@@ -1292,7 +1298,7 @@ workflows:
             - package-enterprise
             - build-enterprise-windows-installer
       - end-to-end-tests:
-          # No filters, meaning this job runs for all branches
+          filters: *filter-all
           requires:
             - package-oss
       - build-docs-website:
